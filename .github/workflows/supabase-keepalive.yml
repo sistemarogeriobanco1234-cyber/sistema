@@ -1,0 +1,40 @@
+name: Supabase - verificacao de atividade
+
+on:
+  schedule:
+    # 03:23 e 15:23 UTC: duas execucoes diarias, sujeitas a atrasos do GitHub.
+    - cron: '23 3,15 * * *'
+  workflow_dispatch:
+
+jobs:
+  verificar-banco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Consultar a funcao SQL e validar a resposta
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL" || { echo 'Falta o secret SUPABASE_URL'; exit 1; }
+          test -n "$SUPABASE_PUBLISHABLE_KEY" || { echo 'Falta o secret SUPABASE_PUBLISHABLE_KEY'; exit 1; }
+          BODY="$(mktemp)"
+          CODE="$(curl --silent --show-error --retry 2 --connect-timeout 12 --max-time 40 \
+            --output "$BODY" --write-out '%{http_code}' \
+            --request POST "${SUPABASE_URL%/}/rest/v1/rpc/os_verificar_atividade" \
+            --header "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            --header 'Content-Type: application/json' \
+            --data '{}')"
+          echo "HTTP: $CODE"
+          cat "$BODY"
+          echo
+          test "$CODE" = '200' || exit 1
+          python3 - "$BODY" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as f:
+              data = json.load(f)
+          if data.get('ok') is not True:
+              raise SystemExit('Resposta invalida do banco')
+          print('Consulta de atividade concluida')
+          PY
